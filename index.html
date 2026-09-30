@@ -34,6 +34,8 @@
   color-scheme:dark}
 
 *{box-sizing:border-box}
+[hidden]{display:none!important}
+img,svg{max-width:100%}
 body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-body);margin:0}
 .wrap{max-width:1080px;margin:0 auto;padding-inline:16px;padding-block:0 48px}
 h1,h2,h3{font-family:var(--f-display);font-weight:700;text-wrap:balance;margin:0;letter-spacing:-.01em}
@@ -655,6 +657,7 @@ function showTab(t){
   for (const id of ['dashboard','debts','progress']){ document.getElementById(id).hidden = id !== t; document.getElementById('tab-'+id).setAttribute('aria-selected', id === t); }
   if (t === 'dashboard') renderDashboard(); if (t === 'progress') drawProgress();
   try { localStorage.setItem('ffp-tab', t); } catch(e){}
+  if (window.scrollY > 0) window.scrollTo({top:0});
 }
 document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.getAttribute('aria-controls'))));
 
