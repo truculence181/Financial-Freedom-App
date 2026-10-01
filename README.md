@@ -9,6 +9,9 @@ A single-page web app that calculates your debt-to-income (DTI) ratio, recommend
 - **Payoff strategies:** avalanche (highest rate first) vs. snowball (smallest balance first), with a side-by-side comparison of debt-free date and total interest.
 - **Snowball rollover:** freed-up payments roll into the next debt. Optionally pays consumer debt before the mortgage.
 - **Dashboards:** stacked balance projection vs. minimums only, this month's payment per debt, payoff order and dates, interest saved.
+- **Saved plans:** keep up to 20 named plans (for example "Avalanche, aggressive" and "Snowball, steady"). Create, duplicate, rename, delete and switch between them from the plan bar at the top.
+- **Plan comparison:** the Dashboard lists every saved plan with its extra payment, debt-free date and total interest, with a one-tap Switch.
+- **Refresh:** reloads your saved plans and recalculates every projection from the current month.
 - **Progress tracking:** log balances monthly and chart real progress against the plan.
 - **Warnings:** flags payments that don't cover interest and budgets that run negative.
 
@@ -25,7 +28,7 @@ No build step and no dependencies. Open `index.html` in a browser.
 
 ## Data and privacy
 
-All data stays in your browser's local storage. Nothing is sent to a server. Clearing site data, or opening the app in a different browser or device, starts fresh.
+All plans stay in your browser's local storage. Nothing is sent to a server. Clearing site data, or opening the app in a different browser or device, starts fresh.
 
 ## How the math works
 

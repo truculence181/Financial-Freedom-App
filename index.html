@@ -166,6 +166,22 @@ select.in{font-family:var(--f-body)}
 
 /* progress */
 .logs td{font-size:.86rem}
+/* plan manager */
+.planbar{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;padding-block:0 14px}
+.plan-pick{display:flex;flex-direction:column;gap:4px;flex:1 1 220px;min-width:0;max-width:360px}
+.plan-pick .in{font-family:var(--f-body);font-weight:600}
+.plan-actions{display:flex;flex-wrap:wrap;gap:6px}
+.plan-actions .btn{padding:8px 12px}
+.btn.armed{background:var(--bad);color:var(--surface);border-color:var(--bad)}
+.btn[disabled]{opacity:.55;cursor:default}
+.plan-name{display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex-basis:100%;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px}
+.plan-name label{flex-basis:100%}
+.plan-name .in{flex:1 1 200px;font-family:var(--f-body)}
+.plan-msg{flex-basis:100%;font-size:.84rem;color:var(--muted);min-height:0}
+.plans-table td{vertical-align:middle}
+.plans-table tr.is-active td:first-child{box-shadow:inset 3px 0 0 var(--accent);padding-left:10px}
+.plans-table td:first-child{padding-left:10px}
+.plans-table .x{padding:6px 10px}
 .foot{font-size:.78rem;color:var(--muted);margin-top:28px;max-width:70ch}
 @media (prefers-reduced-motion:no-preference){.order-row .bar span{transition:width .35s ease}}
 </style>
@@ -179,6 +195,27 @@ select.in{font-family:var(--f-body)}
     </div>
     <div class="save" id="save" data-s="idle"><i></i><span id="saveText">Not saved yet</span></div>
   </header>
+
+  <div class="planbar" id="planbar">
+    <div class="plan-pick">
+      <label for="planSelect" class="eyebrow">Active plan</label>
+      <select id="planSelect" class="in"></select>
+    </div>
+    <div class="plan-actions">
+      <button class="btn" id="newPlan" type="button">New plan</button>
+      <button class="btn" id="dupPlan" type="button">Duplicate</button>
+      <button class="btn" id="renamePlan" type="button">Rename</button>
+      <button class="btn danger" id="delPlan" type="button">Delete</button>
+      <button class="btn" id="refreshBtn" type="button" title="Reload your saved plans and recalculate from this month">&#8635; Refresh</button>
+    </div>
+    <form class="plan-name" id="nameForm" hidden>
+      <label for="nameInput" class="eyebrow" id="nameLabel">Name this plan</label>
+      <input class="in" id="nameInput" maxlength="40" autocomplete="off">
+      <button class="btn primary" type="submit" id="nameSave">Save</button>
+      <button class="btn ghost" type="button" id="nameCancel">Cancel</button>
+    </form>
+    <div class="plan-msg" id="planMsg" role="status"></div>
+  </div>
 
   <nav class="tabs" role="tablist">
     <button role="tab" id="tab-dashboard" aria-controls="dashboard" aria-selected="true">Dashboard</button>
@@ -257,6 +294,11 @@ select.in{font-family:var(--f-body)}
         <div class="order" id="order"></div>
       </div>
     </div>
+
+    <div class="card">
+      <header><h2>Your saved plans</h2><span class="muted" style="font-size:.85rem">Compare side by side, then switch</span></header>
+      <div style="overflow-x:auto"><table class="plans-table" id="plansTable"></table></div>
+    </div>
   </section>
 
   <!-- INPUTS -->
@@ -309,7 +351,8 @@ const USD2 = new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',mini
 const MON = new Intl.DateTimeFormat('en-US',{month:'short',year:'numeric'});
 const num = v => { const n = parseFloat(String(v ?? '').replace(/[$,\s%]/g,'')); return isFinite(n) ? n : 0; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const NOW = new Date(); NOW.setDate(1); NOW.setHours(0,0,0,0);
+const thisMonth = () => { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; };
+let NOW = thisMonth();
 const addM = (d,m) => { const x = new Date(d); x.setMonth(x.getMonth()+m); return x; };
 const mKey = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
 const fromKey = k => { const [y,m] = k.split('-').map(Number); return new Date(y, m-1, 1); };
@@ -358,8 +401,27 @@ function sanitize(s){
     history: Array.isArray(s.history) ? s.history.filter(h => h && /^\d{4}-\d{2}$/.test(h.month)).slice(-240) : []
   };
 }
-let S = exampleState();
-try { const raw = localStorage.getItem('ffp-state'); if (raw) S = sanitize(JSON.parse(raw)); } catch(e){}
+/* plans: one store holds every named plan; S is the active plan's state */
+const MAX_PLANS = 20;
+const newPlan = (name, state) => ({id: 'p' + uid(), name, updatedAt: new Date().toISOString(), state});
+function defaultStore(){ const p = newPlan('Example plan', exampleState()); return {v:2, activeId:p.id, plans:[p]}; }
+function sanitizeStore(o){
+  if (!o || typeof o !== 'object') return defaultStore();
+  if (!Array.isArray(o.plans)){ // a single saved plan from the first version
+    const p = newPlan(o.isExample ? 'Example plan' : 'My plan', sanitize(o)); return {v:2, activeId:p.id, plans:[p]};
+  }
+  const plans = o.plans.filter(p => p && p.state).slice(0, MAX_PLANS).map(p => ({id: String(p.id || 'p'+uid()), name: String(p.name || 'Untitled plan').slice(0,40), updatedAt: p.updatedAt || null, state: sanitize(p.state)}));
+  if (!plans.length) return defaultStore();
+  return {v:2, activeId: plans.some(p => p.id === o.activeId) ? o.activeId : plans[0].id, plans};
+}
+function loadLocal(){
+  try { const raw = localStorage.getItem('ffp-plans'); if (raw) return sanitizeStore(JSON.parse(raw)); } catch(e){}
+  try { const old = localStorage.getItem('ffp-state'); if (old) return sanitizeStore(JSON.parse(old)); } catch(e){}
+  return defaultStore();
+}
+let STORE = loadLocal();
+const activePlan = () => STORE.plans.find(p => p.id === STORE.activeId) || STORE.plans[0];
+let S = activePlan().state;
 
 /* ---------- engine ---------- */
 const isMortgage = d => d.type === 'Mortgage' || d.type === 'Home equity';
@@ -391,9 +453,9 @@ function simulate(debts, extra, strategy, mortgageLast, rollover, baseline){
   return {months:m, interest, payoff, series, layers, first, stuck: ds.some(d => d.bal > 0.005)};
 }
 
-function derive(){
-  const g = S.income.gross, n = S.income.net, e = S.income.essentials;
-  const debts = S.debts;
+function derive(st = S){
+  const g = st.income.gross, n = st.income.net, e = st.income.essentials;
+  const debts = st.debts;
   const pay = debts.reduce((s,d) => s + (d.balance > 0 ? d.min + (isMortgage(d) ? d.escrow : 0) : 0), 0);
   const housing = debts.filter(isMortgage).reduce((s,d) => s + (d.balance > 0 ? d.min + d.escrow : 0), 0);
   const escrow = debts.reduce((s,d) => s + (isMortgage(d) && d.balance > 0 ? d.escrow : 0), 0);
@@ -402,11 +464,11 @@ function derive(){
   const free = n - e - pay;
   const floor10 = x => Math.max(0, Math.floor(x/10)*10);
   const presets = {steady: floor10(free*0.35), rec: floor10(free*0.6), max: floor10(free*0.85)};
-  let extra = S.preset && presets[S.preset] != null ? presets[S.preset] : (S.extra ?? presets.rec);
+  let extra = st.preset && presets[st.preset] != null ? presets[st.preset] : (st.extra ?? presets.rec);
   extra = Math.max(0, extra);
-  const plan = simulate(debts, extra, S.strategy, S.mortgageLast, S.rollover, false);
-  const alt = simulate(debts, extra, S.strategy === 'avalanche' ? 'snowball' : 'avalanche', S.mortgageLast, S.rollover, false);
-  const base = simulate(debts, 0, S.strategy, S.mortgageLast, S.rollover, true);
+  const plan = simulate(debts, extra, st.strategy, st.mortgageLast, st.rollover, false);
+  const alt = simulate(debts, extra, st.strategy === 'avalanche' ? 'snowball' : 'avalanche', st.mortgageLast, st.rollover, false);
+  const base = simulate(debts, 0, st.strategy, st.mortgageLast, st.rollover, true);
   const consumer = debts.filter(d => !isMortgage(d) && d.balance > 0);
   const consumerFree = consumer.length ? Math.max(...consumer.map(d => plan.payoff[d.id] ?? MAXM)) : 0;
   const underwater = debts.filter(d => d.balance > 0 && d.min <= d.balance * d.apr/1200 + 0.005);
@@ -490,6 +552,7 @@ function renderDashboard(){
   $('#order').innerHTML = ord.map((o,k) => `<div class="order-row"><span class="n">${k+1}</span><span>${esc(o.d.name || o.d.type)} <span class="muted" style="font-size:.8rem">${o.d.apr}%</span></span><span class="num" style="font-size:.84rem">${o.m >= MAXM ? 'never' : MON.format(addM(NOW,o.m))}</span><div class="bar"><span style="width:${(o.m/maxM*100).toFixed(1)}%;background:${colorOf(o.i)}"></span></div></div>`).join('') || '<p class="muted" style="margin:0">Nothing to pay off.</p>';
 
   drawProjection();
+  renderPlansTable();
   $('#exampleBanner').hidden = !S.isExample;
 }
 
@@ -616,42 +679,155 @@ function updateWarnings(){
 }
 
 /* ---------- persistence ---------- */
-let db = null, docRef = null, saveTimer = null, saving = Promise.resolve(), remoteReady = false;
-const setSave = (s, t) => { $('#save').dataset.s = s; $('#saveText').textContent = t; };
+let docRef = null, saveTimer = null, saving = Promise.resolve();
+const setSave = (st, t) => { $('#save').dataset.s = st; $('#saveText').textContent = t; };
+const localLabel = () => 'Saved on this device';
+function writeRemote(){
+  const body = JSON.parse(JSON.stringify(STORE));
+  saving = saving.then(() => docRef.set(body)).then(() => setSave('ok', 'Saved to your account'), e => {
+    if (e && e.code === 'unavailable') { setSave('busy','Retrying save…'); setTimeout(persist, 1500 + Math.random()*1000); }
+    else setSave('err', e && e.code === 'quota_exceeded' ? 'Storage full' : 'Saved on this device only');
+  });
+  return saving;
+}
 function persist(){
-  try { localStorage.setItem('ffp-state', JSON.stringify(S)); } catch(e){}
-  if (!docRef){ setSave('ok', remoteReady ? 'Saved on this device' : 'Saved on this device'); return; }
+  const ap = activePlan(); if (ap) ap.updatedAt = new Date().toISOString();
+  try { localStorage.setItem('ffp-plans', JSON.stringify(STORE)); } catch(e){}
+  if (!docRef){ setSave('ok', localLabel()); return; }
   clearTimeout(saveTimer); setSave('busy', 'Saving…');
-  saveTimer = setTimeout(() => {
-    const body = JSON.parse(JSON.stringify(S));
-    saving = saving.then(() => docRef.set(body)).then(() => setSave('ok', 'Saved to your account'), e => {
-      if (e && e.code === 'unavailable') { setTimeout(persist, 1500 + Math.random()*1000); setSave('busy','Retrying save…'); }
-      else setSave('err', e && e.code === 'quota_exceeded' ? 'Storage full' : 'Saved on this device only');
-    });
-  }, 700);
+  saveTimer = setTimeout(writeRemote, 700);
+}
+async function flush(){
+  if (docRef && saveTimer){ clearTimeout(saveTimer); saveTimer = null; await writeRemote(); }
+  try { await saving; } catch(e){}
 }
 function touched(){
-  if (S.isExample){ S.isExample = false; S.history = []; }
+  if (S.isExample){ S.isExample = false; S.history = []; const ap = activePlan(); if (ap.name === 'Example plan') ap.name = 'My plan'; renderPlanBar(); }
   persist();
 }
-(async () => {
+async function loadRemote(){
+  const snap = await docRef.get();
+  if (snap.exists) return sanitizeStore(snap.data());
+  return null;
+}
+async function connect(){
   try {
-    if (!window.claude || !window.claude.use) { setSave('ok','Saved on this device'); return; }
+    if (!window.claude || !window.claude.use) { setSave('ok', localLabel()); return; }
     const [dbNs, userNs] = await Promise.all([claude.use('db'), claude.use('user')]);
     const id = userNs ? await userNs.id() : null;
-    if (!dbNs || !id) { setSave('ok','Saved on this device'); return; }
-    db = dbNs; docRef = db.doc('data/users/' + id + '/plan');
-    const snap = await docRef.get();
-    remoteReady = true;
-    if (snap.exists){ S = sanitize(snap.data()); renderInputs(); renderAll(); setSave('ok','Saved to your account'); }
-    else if (!S.isExample){ persist(); }
-    else setSave('ok','Private to you · autosaves');
-  } catch(e){ docRef = null; setSave('ok','Saved on this device'); }
-})();
+    if (!dbNs || !id) { setSave('ok', localLabel()); return; }
+    docRef = dbNs.doc('data/users/' + id + '/plans');
+    let remote = await loadRemote();
+    if (!remote){ // carry over the single plan saved by the first version
+      const legacy = await dbNs.doc('data/users/' + id + '/plan').get();
+      if (legacy.exists) { remote = sanitizeStore(legacy.data()); STORE = remote; useActive(); persist(); }
+    } else { STORE = remote; useActive(); }
+    if (!remote && !(STORE.plans.length === 1 && S.isExample)) persist();
+    else setSave('ok', remote ? 'Saved to your account' : 'Private to you · autosaves');
+    renderEverything();
+  } catch(e){ docRef = null; setSave('ok', localLabel()); }
+}
+connect();
 
 /* ---------- wiring ---------- */
 let current = 'dashboard';
 function renderAll(){ renderDashboard(); if (current === 'progress') drawProgress(); }
+function useActive(){ S = activePlan().state; }
+function renderEverything(){ renderPlanBar(); renderInputs(); renderAll(); }
+
+/* ---------- plans ---------- */
+const stratName = st => st === 'snowball' ? 'Snowball' : 'Avalanche';
+function renderPlanBar(){
+  const sel = $('#planSelect');
+  sel.innerHTML = STORE.plans.map(p => `<option value="${esc(p.id)}"${p.id === STORE.activeId ? ' selected' : ''}>${esc(p.name)}</option>`).join('');
+  $('#newPlan').disabled = $('#dupPlan').disabled = STORE.plans.length >= MAX_PLANS;
+  $('#delPlan').textContent = STORE.plans.length > 1 ? 'Delete' : 'Clear';
+  renderPlansTable();
+}
+function renderPlansTable(){
+  const rows = STORE.plans.map(p => {
+    const d = derive(p.state), act = p.id === STORE.activeId;
+    const when = d.total <= 0 ? 'Debt-free' : d.plan.stuck ? '50+ yrs' : MON.format(addM(NOW, d.plan.months));
+    return `<tr class="${act ? 'is-active' : ''}"><td><b>${esc(p.name)}</b>${act ? '<span class="tag">Active</span>' : ''}<div class="muted" style="font-size:.76rem">${stratName(p.state.strategy)} · ${p.state.isExample ? 'example numbers' : USD0.format(d.total) + ' debt'}</div></td>
+      <td class="r"><span class="num">${USD0.format(d.extra)}</span></td>
+      <td class="r"><span class="num">${when}</span></td>
+      <td class="r"><span class="num">${USD0.format(d.plan.interest)}</span></td>
+      <td class="r">${act ? '' : `<button class="x" data-switch="${esc(p.id)}">Switch</button>`}</td></tr>`;
+  }).join('');
+  $('#plansTable').innerHTML = `<thead><tr><th>Plan</th><th class="r">Extra /mo</th><th class="r">Debt-free</th><th class="r">Interest</th><th></th></tr></thead><tbody>${rows}</tbody>`
+    + (STORE.plans.length < 2 ? `<tbody><tr><td colspan="5" class="muted" style="font-size:.84rem">Tap <b>Duplicate</b> above to copy this plan, then change the extra payment or method to compare.</td></tr></tbody>` : '');
+}
+let msgTimer;
+function planMsg(t){ $('#planMsg').textContent = t; clearTimeout(msgTimer); msgTimer = setTimeout(() => $('#planMsg').textContent = '', 4000); }
+function switchPlan(id){
+  if (!STORE.plans.some(p => p.id === id) || id === STORE.activeId) return;
+  STORE.activeId = id; useActive(); projHover = null; persist(); renderEverything();
+  planMsg('Switched to ' + activePlan().name + '.');
+}
+let nameMode = null;
+function openName(mode){
+  nameMode = mode; const ap = activePlan();
+  $('#nameLabel').textContent = mode === 'rename' ? 'Rename this plan' : mode === 'dup' ? 'Name the copy' : 'Name the new plan';
+  $('#nameInput').value = mode === 'rename' ? ap.name : mode === 'dup' ? (ap.name + ' copy').slice(0,40) : 'Plan ' + (STORE.plans.length + 1);
+  $('#nameSave').textContent = mode === 'rename' ? 'Save name' : 'Create plan';
+  $('#nameForm').hidden = false; $('#nameInput').focus(); $('#nameInput').select();
+}
+function closeName(){ nameMode = null; $('#nameForm').hidden = true; }
+$('#planSelect').addEventListener('change', e => switchPlan(e.target.value));
+$('#newPlan').addEventListener('click', () => openName('new'));
+$('#dupPlan').addEventListener('click', () => openName('dup'));
+$('#renamePlan').addEventListener('click', () => openName('rename'));
+$('#nameCancel').addEventListener('click', closeName);
+$('#nameInput').addEventListener('keydown', e => { if (e.key === 'Escape') closeName(); });
+$('#nameForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const name = $('#nameInput').value.trim().slice(0,40);
+  if (!name){ $('#nameInput').focus(); return; }
+  if (nameMode === 'rename'){ activePlan().name = name; planMsg('Renamed to ' + name + '.'); }
+  else {
+    if (STORE.plans.length >= MAX_PLANS){ planMsg('You can keep up to ' + MAX_PLANS + ' plans. Delete one to add another.'); closeName(); return; }
+    let state;
+    if (nameMode === 'dup'){ state = sanitize(JSON.parse(JSON.stringify(S))); }
+    else { state = blankState(); }
+    const p = newPlan(name, state); STORE.plans.push(p); STORE.activeId = p.id; useActive(); projHover = null;
+    planMsg(nameMode === 'dup' ? 'Copied. Changes here won\u2019t affect the original.' : 'New plan created. Add your income and debts.');
+  }
+  const wasNew = nameMode === 'new';
+  closeName(); persist(); renderEverything();
+  if (wasNew) showTab('debts');
+});
+$('#delPlan').addEventListener('click', () => {
+  const b = $('#delPlan');
+  if (!b.classList.contains('armed')){
+    b.classList.add('armed'); b.textContent = STORE.plans.length > 1 ? 'Confirm delete' : 'Confirm clear';
+    setTimeout(() => { b.classList.remove('armed'); b.textContent = STORE.plans.length > 1 ? 'Delete' : 'Clear'; }, 3000); return;
+  }
+  b.classList.remove('armed');
+  const gone = activePlan();
+  if (STORE.plans.length > 1){
+    STORE.plans = STORE.plans.filter(p => p.id !== gone.id); STORE.activeId = STORE.plans[0].id;
+    planMsg('Deleted ' + gone.name + '.');
+  } else {
+    gone.state = blankState(); gone.name = 'My plan';
+    planMsg('Plan cleared.');
+  }
+  useActive(); projHover = null; persist(); renderEverything();
+});
+$('#refreshBtn').addEventListener('click', async () => {
+  const b = $('#refreshBtn'); b.disabled = true; b.textContent = 'Refreshing…';
+  try {
+    await flush();
+    const keep = STORE.activeId;
+    let fresh = null;
+    if (docRef){ try { fresh = await loadRemote(); } catch(e){} }
+    if (!fresh) fresh = loadLocal();
+    if (fresh.plans.some(p => p.id === keep)) fresh.activeId = keep;
+    STORE = fresh; useActive(); NOW = thisMonth(); projHover = null;
+    renderEverything();
+    planMsg('Refreshed at ' + new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) + '. Projections start from ' + MON.format(NOW) + '.');
+  } finally { b.disabled = false; b.innerHTML = '&#8635; Refresh'; }
+});
+$('#plansTable').addEventListener('click', e => { const b = e.target.closest('[data-switch]'); if (b){ switchPlan(b.dataset.switch); window.scrollTo({top:0}); } });
 function showTab(t){
   current = t;
   for (const id of ['dashboard','debts','progress']){ document.getElementById(id).hidden = id !== t; document.getElementById('tab-'+id).setAttribute('aria-selected', id === t); }
@@ -661,7 +837,7 @@ function showTab(t){
 }
 document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.getAttribute('aria-controls'))));
 
-$('#startMine').addEventListener('click', () => { S = blankState(); persist(); renderInputs(); renderAll(); showTab('debts'); $('#gross').focus(); });
+$('#startMine').addEventListener('click', () => { const ap = activePlan(); ap.state = blankState(); if (ap.name === 'Example plan') ap.name = 'My plan'; useActive(); persist(); renderEverything(); showTab('debts'); $('#gross').focus(); });
 
 ['gross','net','essentials'].forEach(k => $('#'+k).addEventListener('input', e => { S.income[k] = num(e.target.value); touched(); renderAll(); }));
 
@@ -705,6 +881,7 @@ $('#logTable').addEventListener('click', e => {
 let rt; const ro = new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(() => { if (current === 'dashboard') drawProjection(); if (current === 'progress') drawProgress(); }, 120); });
 ro.observe(document.querySelector('.wrap'));
 
+renderPlanBar();
 renderInputs();
 let startTab = 'dashboard';
 const h = (location.hash || '').slice(1);
